@@ -5,51 +5,53 @@
 #   `--' `--'`--'         `------' `--'     `-------'  
 # |--------------------- AI GPD ---------------------|
 # 
-# Chain-of-Thought RAG pipeline for populism scoring (Team Populism's GPD)
+# Chain-of-Thought Multimodel RAG pipeline for populism scoring (Team Populism's GPD)
+# + Cross-encoder Re-ranking with Score Rank Fusion
 # ---------------------------------------------------------------------------- #
-# * Encapsulates the entire training curriculum (TP's Holistic Grading training
-#   and detailed rubric) as chat prompts.
-# * Uses a Python helper (“build_index_v3.py”) via **reticulate** to
-#   embed and index training speeches, then retrieves the top-k
-#   most similar examples to the target speech (RAG step).
-# * Stitches together system + user + assistant messages, combines the
-#   retrieved examples, and appends granular scoring instructions.
-# * Sends the finished message list to an Ollama-hosted LLM
-#   (`AskOllama::ask_ollama`, Tamaki & Littvay, 2025) to obtain a quantified 
-#   populism score, evidence quotes, and category-by-category reasoning.
-# 
-# Eduardo Tamaki (eduardo@tamaki.ai)
+# Author: Eduardo Tamaki (eduardo@tamaki.ai)
+# Date: July 10, 2025
 #
-# Date: June 4, 2025
-#
+# This script encapsulates the full retrieval-augmented populism scoring pipeline
+# designed by Team Populism's AI research team. It combines a few-shot, holistic
+# grading framework with a multimodal retrieval system and local LLM inference.
 # ---------------------------------------------------------------------------- #
 
-# Load packages ----------------------------------------------------------------
-# Check whether the {devtools} package is already installed; if not, pull it
-# from CRAN.  {devtools} is needed to install R packages directly from GitHub.
+# 1. Setup & Dependencies ------------------------------------------------------
+# Ensure {devtools} is available to install GitHub packages if needed
 if (!requireNamespace("devtools", quietly = TRUE)) install.packages("devtools")
 
-# (Re-)install the development version of {AskOllama} from GitHub.
-#   • ertamaki/AskOllama provides a thin R wrapper around a "locally"  
-#     running Ollama LLM server.
-#   • force = TRUE ensures any older copy is overwritten with the latest commit.
+# Reinstall my development version of AskOllama to interact with local (our server) 
+# Ollama models. 
+# Use `force = TRUE` to ensure updates always overwrite older versions 
 devtools::install_github("ertamaki/AskOllama", force = TRUE)
 
-# Load {reticulate}, which lets R interoperate seamlessly with Python.
-# We rely on it later to call the PopulismRAG class defined in build_index_v3.py.
+# Load {reticulate} so we can call Python code/classes from within R
 library(reticulate)
 
-# Prompt -----------------------------------------------------------------------
+# 2. CoT Prompt ----------------------------------------------------------------
 # This prompt template was developed in-house by TP's AI research team.
 # The original release used a Chain-of-Thought (CoT) few-shot format
-# (available upon request).
-# The present version adds a Retrieval-Augmented Generation (RAG) layer: 
-# it fetches the top-k closest, pre-scored training speeches from a FAISS 
-# index and injects them as contextual anchors, yielding reproducible, 
-# example-grounded populism scores.
+# (available upon request in private Git repository).
+# 
+# The present version adds a Multi-model Retrieval-Augmented Generation (RAG) 
+# layer that works as follows:
+# 1. Training speeches are embedded using an ensemble of three semantic models
+# 2. Embeddings are indexed via FAISS for efficient similarity search
+# 3. For each target speech, the top-k most similar training speeches are 
+#    retrieved from each model
+# 4. A cross-encoder re-ranks candidates to prioritize rhetorical structure 
+#    similarity over mere topic similarity
+# 5. Rankings from multiple models are combined using score fusion to reduce
+#    individual embedding bias and capture diverse semantic dimensions
+# 6. The final set of retrieved speeches is injected as contextual anchors
+#    into the coding prompt
+# 
+# This approach yields more reproducible, example-grounded populism scores by
+# ensuring retrieved examples share similar rhetorical patterns rather than
+# just similar topics.
 # ---------------------------------------------------------------------------- #
 
-# Keep the conceptual training (steps 1-2)
+# ------------------------- 1. Conceptual Training ---------------------------- #
 intro_system <- "You are a researcher who quantifies populist and plurlist discourse in speeches by political figures. You speak every and any language necessary. The training we present here teaches you how to classify and quantify populist and pluralist discourse in speeches by political figures. This training uses a technique called ‘holistic grading’. It will teach you 1) the definition and necessary components of populism, 2) the process of holistic grading, and 3) give several real world examples of how we want you to read, think, and grade as you analyze speeches for populist discourse."
 
 step_1_user <- "What is populism? To explain this, we use the ideational approach to studying populism, which views populism as a Manichaean discourse that identifies good with a unified will of the people and evil with a conspiring elite.
@@ -66,6 +68,7 @@ What is the opposite of populism? While populism may have no single opposite, or
 Political pluralism is a theory and practice of politics that recognizes and affirms the diversity of interests, values, and identities within a society, emphasizing that no single group should dominate the political process. It holds that political power is, and should be, distributed among multiple competing groups, each with legitimate input into decision-making. Political pluralism values liberal and democratic institutional mechanisms (like free elections, separation of powers, and legal protections for dissent) that ensure open participation and safeguard against authoritarianism. At its core, it assumes that conflict and disagreement are natural and productive elements of democratic life, best managed through negotiation, compromise, and institutional checks and balances.
 
 This more accepting view strongly contrasts with populism in several ways. First, the view that there are many groups that can co-exists peacefully and legitimately clashes with the dualistic view of populism that perceives politics as an epic battle between two antagonistic groups, with the good people being the only legitimate force in politics. Furthermore, pluralist emphasis on good faith attempts to engage in honest debate similarly clash with populism’s view that elite are evil and conspiring and should be destroyed, not treated to good faith debate. Finally, pluralism focus on democratic and institutional means to resolve conflict juxtaposes against the more radical and sometimes illiberal framing of populist leader, who often deride institutions that protect minority interests at the expense of the majority."
+
 step_1_ast <- "There are two necessary components to populism discourse: the idea of pure and virtuous people, and the idea of an evil conspiring elite bent on subverting the will of the people. As you score speeches, it's important to remember that both of these components need to be present. Populism increases in intensity when there is a strong Manichean element. Similarly, extensive use of pluralist rhetoric is often indicative of little to no populism, though the two frames can exist in moderate amounts. To show how you should approach scoring rhetoric for populism, let’s consider the following four hypothetical paragraphs. 
 
 Example 1:
@@ -112,6 +115,7 @@ This paragraph strongly displays anti-elite rhetoric. The line ‘a corrupt elit
 The paragraph is also clearly pro-people. Phrases like ‘Ordinary citizens, the hardworking backbone of our nation’ and ‘the righteous many who seek justice’ elevate the people as inherently virtuous and morally superior. This reinforces the idea of a pure, unified people who are betrayed by elites, a key hallmark of populist discourse.
 
 Manichaeism is very present here. The speaker frames politics in absolute moral terms—’not just political—it is moral’—and divides society into ‘the righteous many’ and ‘the corrupt few.’ This creates a clear binary between good and evil, indicating a Manichaean thinking in populism. The tone is cosmic and moralistic, suggesting a fundamental battle between right and wrong.
+
 Notably, there are not many pluralist elements here. There is no recognition of a diverse set of legitimate interests. Instead, we see only a dualistic view of politics. But even here, only one side is treated as legitimate and to be treated in good faith. Moreover, the speaker seems to advocate for radical change
 
 This paragraph contains both elements of populist discourse: it is anti-elite, pro-people. Additionally, it isstrongly Manichaean. I would consider this a highly populist paragraph.
@@ -128,21 +132,25 @@ However, there is no identifiable elite or people. The good side appears to be a
 
 Though there are no real pluralist elements here, I also would not call this populism. Sure, there is Manichism, but there is no people-elite divide. It is something totally different, but not populism or pluralism. I would say this is not populist."
 
-# Holistic Grading (step 2) -----------------------------------
-
+# -------------------------- 2. Holistic Grading ----------------------------- #
 step_2_user <- "The technique we use to measure populism in political speeches is called holistic grading. Holistic grading, unlike standard techniques of content analysis (either human coded or computer based), asks readers to interpret whole texts rather than count content at the level of words or sentences. Holistic grading is a pedagogical assessment technique that is widely used by teachers of writing and has been extensively developed by administrators of large-scale exams, principally educational Testing Services and the Advanced Placement exams they administer for the College Board in the United States. 
 
 Unlike analytical grading, which tries to break a text down into its parts and then combine the scores of each of those parts (as a content analysis does), a holistic approach works by assessing the overall qualities of a text and then assigning a single grade without any intervening calculations. The first step is to design a rubric, or a simplified guide for evaluating a text that identifies the rough qualities associated with different types or grades. The second step is to train a set of graders in the use of the rubric, using not only the rubric itself but also a set of sample or ‘anchor’ texts that exemplify each type or score described in the rubric. This combination of rubric and anchor texts is the hallmark of holistic grading. Finally, the actual grading is conducted using two to three graders per text, with tests of intercoder reliability calculated along the way. 
 
 There are two reasons for using holistic grading to measure populist discourse. First, we cannot gauge a broad, latent set of meanings in a text— a discourse—simply by counting words. Because the ideas that constitute the content of the discourse are held subconsciously and conveyed as much by the tone and style of the language as the actual words, there is no single word or phrase distinct to populist discourse or a particular location in the text where we can go to find the speaker’s ‘statement on the issue,’ as we could using party manifestos to measure political ideology… Second, while it is possible to use human-coded content analysis at the level of phrases or sections of text, these techniques are extremely time-consuming and unsuitable for the kind of cross-country analysis we need to generate large-N comparisons. In contrast, holistic grading requires no special preparation of the physical text and proceeds fairly quickly once the texts are available, and it allows us to compare texts in multiple languages without any translation so long as coders speak a common second language that they can use in their training and in reporting their results."
+
 step_2_ast <- "To effectively evaluate speeches for populist qualities, we use a method called holistic grading. Unlike analytical grading or machine-coded content analysis, holistic grading does not rely on counting the frequency of specific words or breaking a text into discrete parts. Instead, it asks human coders to interpret the overall meaning and tone of an entire passage. 
+
 Using the following hypothetical paragraph, this is how I would use holistic grading:
+
 'This nation is under siege—not by foreign enemies, but by a greedy class of elites who’ve sold our future for profit. But we, the people, are not powerless. We are the heart of this country, the forgotten majority who still believe in truth, in justice, and in each other. The choice is clear: stand with the corrupt few who have rigged the system, or rise with the righteous many to reclaim our destiny. This is more than an election—it is a moral reckoning.' 
+
 A strong holistic evaluation of this passage would first highlight how it clearly identifies and condemns a conspiratorial elite—the 'greedy class' that has sold out the nation. It would also emphasize how the people are portrayed as inherently good, unified, and central to the nation’s moral core. Finally, the passage casts the current political moment as a grand, moral struggle between good and evil—making the Manichaean element unmistakable. Because all three elements of populism are present and tightly integrated, this passage would be scored as highly populist.
+
 In contrast, a poor holistic grading example might simply state, 'This is clearly populist because it talks about elites and says 'the people.' It uses strong language like 'corrupt' and 'moral reckoning,' so it’s definitely populist. 10/10 populist.' This kind of evaluation is shallow. It doesn’t explain why the language matters, doesn’t assess whether all three components are present, and confuses the mere presence of strong language or populist-sounding words with actual populist discourse. Essentially, it treats the grading process as word-spotting rather than interpreting broader meaning and intent, which directly contradicts the holistic method. True holistic grading requires the grader to move beyond surface-level cues and engage deeply with the structure, tone, and underlying worldview conveyed by the speech."
 
 
-# Create a template for the rubric explanation (formerly step 3)
+# ------------------------- 3. Rubric Explanation ---------------------------- #
 rubric_explanation <- "We have developed a rubric to guide coders on how to grade speeches on a scale of 0 to 2, with higher values indicating higher levels of populism. We want to give you more information on the rubric. 
 
 First, we want to grade the speeches on a scale from 0 to 2, with scores getting down the tenths place. If you need to round to a decimal down to the tenths place, always round down. So, you may grade something as a 0.2 or a 1.1, or even a 2.0 or 0.0. However, we think that the following anchor points are helpful., keeping in mind that these models 
@@ -182,6 +190,7 @@ Category 5 (Incremental reform): The discourse does not argue for systemic chang
 Category 6 (Commitment to institutional norms, rights and liberties): Formal rights and liberties are openly respected, and the opposition is treated with courtesy and as a legitimate political actor. The discourse will not encourage or justify illegal, violent actions. There will be great respect for institutions and the rule of law. If power is abused, it is either an innocent mistake or an embarrassing breach of democratic standards."
 
 
+# ---------------------- 4. Dynamic Section for RAG -------------------------- #
 # Dynamic section for RAG examples
 create_rag_section <- function(retrieved_examples) {
   # Format retrieved examples like the original training speeches
@@ -193,7 +202,7 @@ create_rag_section <- function(retrieved_examples) {
   return(example_text)
 }
 
-# Modified final prompt intro
+# ------------------------- 5. Final Prompt Wrap ----------------------------- #
 final_prompt_intro <- "Using the populist training you just completed, please code a speech, with quotes, a score, and reasoning on why you think each element is present and why you gave it the score you did. 
 
 As you score it, recall how the example speeches from the training sounded and were coded, so that you can score the following speech so that the final score is anchored in the broader comparative context and you can generate a reasoning similar to what those example were like. 
@@ -202,7 +211,9 @@ Some last bits of instruction. First, grade this holisitcally. There is no mathm
 
 Second, recall that for something to be populist, you must have pro-peoplism and anti-elitism. If we are missing either one of those, these speech is unliekly populist. Meanwhile, only the most Manichean of populist speeches are highly populist.
 
-For reference, here are some rules of thumb. A 0 is non-populist; if a speech has no pro-people and anti-elite elements, then the speech should have a very low score, close to a 0.0. If it has one of the three elements, it can be a little higher than a 0.0, but not much higher. A 0.5 is somewhat populist; if a speech has some elements of both pro-people or anti-elite rheotic, we would say that it is somehwat populist, around a 0.5. A 1.0 is populist; here, the pro-people and anti-elite elements are present. A 2.0 is very populist; this is like a one, but the Manichean element is turned up to the max.
+For reference, here are some rules of thumb. A 0 is non-populist; if a speech has no pro-people and anti-elite elements, then the speech should have a very low score, close to a 0.0. If it has one of the three elements, it can be a little higher than a 0.0, but not much higher. A 0.5 is somewhat populist; if a speech has some elements of both pro-people and anti-elite rhetoric, we would say that it is somewhat populist, around a 0.5 (or lower). Mere mentions or weak pro-people and anti-elite rhetoric should score lower - typically 0.1-0.3 depending on strength. A 1.0 is populist; here, the pro-people and anti-elite elements are present. A 2.0 is very populist; this is like a one, but the Manichean element is turned up to the max.
+
+A good way to think about this is that the weaker component weighs heavier on the score. If something is strongly people-centric but not very anti-elite (a common speech type), then we would consider this to be not very populist because we weigh the weaker components more when grading this holistically. The same is true vice versa. These kinds of grades usually fall in the 0.0 to 0.3 range. When something is moderately people-centric or anti-elite, we might begin to give that a grade of 0.4, increasing as the weaker component gets stronger. In summary, both people-centrism and anti-elitism need to be present.
 
 Third, if a speech is highly pluralist, it is unlikely to be highly populists. If you find that a speech is very pluralist, then that should be an indicator that the populism levels are probably lower. Do not give a pluralism score, just adjust the populism score based on if the level of pluralist elements.
 
@@ -238,9 +249,15 @@ Category 5 (Incremental reform)
 
 Category 6 (Commitment to institutional norms, rights and liberties).
 
-Give a single grade for the entire speech that measures the level of populism."
+Give a single grade for the entire speech that measures the level of populism.
+
+Note: Retrieved examples may discuss similar topics but have very different populism scores. 
+Focus on HOW issues are framed (us vs them, moral absolutes) rather than WHAT topics are discussed."
 
 
+# 3. Querrying (Ollama) w/ RAG -------------------------------------------------
+
+# -------------------------- 1. Prompt Building ------------------------------ #
 # Function to build complete prompt with RAG
 build_rag_prompt <- function(target_speech, retrieved_examples) {
   messages <- list(
@@ -256,49 +273,54 @@ build_rag_prompt <- function(target_speech, retrieved_examples) {
   return(messages)
 }
 
-new_speech <- "" # Add here the Speech we want to code
-
-# Querying (Ollama) w/ RAG -----------------------------------------------------
+# ---------------------- 2. Querying (Ollama) w/ RAG -------------------------- #
 # ------------------------------------------------------------------------- #
-#  R–Python bridge: load helper that builds / queries the FAISS index
+#  R–Python bridge: load helper that builds / queries the FAISS index, etc.
 # ------------------------------------------------------------------------- #
-# `reticulate::source_python()` pulls **build_index_v3.py** into the current
+# `reticulate::source_python()` pulls **full_ensemble(2)_rag** into the current
 # R session.  Everything defined in that Python file becomes accessible via
 # the `py$` object or as native R references when we instantiate classes.
-source_python("build_index_v3.py")
+source_python("full_ensemble(2)_rag")
 
 # ------------------------------------------------------------------------- #
 #  Initialise the RAG helper and build the vector index
+#  Using here the full advanced setup with ensemble models 
 # ------------------------------------------------------------------------- #
-rag <- PopulismRAG()        # Create a new PopulismRAG instance
-rag$load_speeches()         # → Reads all "speech *.md" files, parses metadata,
-                            #   and stores them in `rag$speeches`.
-rag$build_index()           # → Encodes each speech with a sentence-transformer,
-                            #   stacks the embeddings, and inserts them into an
-                            #   in-memory FAISS cosine-similarity index.
+setup_advanced_rag <- function() {
+  cat("🚀 Setting up Advanced PopulismRAG with ensemble models...\n")
+  
+  rag <- CleanFullEnsembleRAG(
+    primary_model = "BAAI/bge-base-en-v1.5",                          # Primary encodding model
+    rerank_model_name = "cross-encoder/ms-marco-MiniLM-L-12-v2",      # Reranker (! avoid using BAAI model so you don't run into an Echo Chamber problem)
+    embedding_strategy = "speech_and_thought",                        # Recommended: our .md (training) files contain both the "speech" and the "thought" (the thought process for each speech). You can also try "speech" and "thought" separately.
+    use_multiple_embeddings = TRUE,                                   # Multimodel/Multiple embeddings: If set to FALSE, it will use only the primary encodding model. If set to TRUE it will use the primary model + multilingual (multilingual-MiniLM-L12-v2) + distilroberta (distilroberta-v1) 
+    enable_performance_tracking = TRUE                                # Performance tracking for research validation
+  )
+  
+  rag$load_speeches()
+  rag$build_indices()
+  
+  cat("✅ Advanced RAG system ready!\n")
+  cat("📊 Models loaded:", length(rag$embedding_models), "\n")
+  
+  return(rag)
+}
 
-# ------------------------------------------------------------------------- #
-#  Retrieve training anchors most similar to the new speech
-# ------------------------------------------------------------------------- #
-similar_speeches <- py$rag$retrieve_similar_speeches(
-  new_speech,               # the raw text we want to score
-  top_k = as.integer(7)     # how many neighbours to pull back
+rag <- setup_advanced_rag()
+
+
+new_speech <- "" # Add here the Speech we want to code
+
+similar_speeches_all <- rag$retrieve_similar_speeches(
+  query_text = new_speech, 
+  top_k = 3L,                          # Top speeches/how many neighbours to pull back
+  faiss_k = 9L,                        # Increased for better quality with ensemble (our maximum is 9 - only 9 training speeches)
+  fusion_method = "score_fusion"       # Multi-model score fusion. You can also do "rank_fusion" or "weighted_fusion" 
 )
 
-# Pretty-print the neighbours so they look like the original training
-# examples (speaker, thought-process notes, rubric evidence, etc.).
-formatted_examples <- py$rag$format_training_examples(similar_speeches)
+formatted_top <- rag$format_training_examples(similar_speeches_all[1])
 
-
-# ---------------------------------------------------------------------------- #
-#  Build the complete chat prompt
-# ---------------------------------------------------------------------------- #
-# Combines:
-#   * theoretical training content (populism vs. pluralism)
-#   * holistic-grading rubric
-#   * the retrieved anchor speeches
-#   * the target speech itself
-messages <- build_rag_prompt(new_speech, formatted_examples)
+messages <- build_rag_prompt(new_speech, formatted_top)
 
 # ---------------------------------------------------------------------------- #
 #  Call the local Ollama LLM to obtain the populism score + reasoning
@@ -308,12 +330,7 @@ response <- AskOllama::ask_ollama(
   model    = "qwen3:235b"   # Our LLM (check list_models())
 )
 
+
 # ---------------------------------------------------------------------------- #
-#  (Optional debugging) Inspect raw chunks returned by the retriever
+#  (Optional debugging and diagnostics) >> SOON <<
 # ---------------------------------------------------------------------------- #
-# retrieved <- py$rag$retrieve_relevant_chunks(new_speech, top_k = as.integer(7))
-# for (chunk in retrieved) {
-#   cat("\n--- Retrieved chunk ---\n")
-#   cat(chunk)
-#   cat("\n")
-# }
