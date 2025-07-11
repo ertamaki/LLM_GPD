@@ -280,7 +280,7 @@ build_rag_prompt <- function(target_speech, retrieved_examples) {
 # `reticulate::source_python()` pulls **full_ensemble(2)_rag** into the current
 # R session.  Everything defined in that Python file becomes accessible via
 # the `py$` object or as native R references when we instantiate classes.
-source_python("full_ensemble(2)_rag")
+source_python("full_ensemble(2)_rag.py")
 
 # ------------------------------------------------------------------------- #
 #  Initialise the RAG helper and build the vector index
