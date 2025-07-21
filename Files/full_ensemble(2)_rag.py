@@ -1,7 +1,55 @@
-# clean_full_ensemble_rag.py - Complete 5-model ensemble with incremental FAISS
-# ==================================================================================
-# Clean implementation with all 5 models using proven incremental FAISS approach
-# ==================================================================================
+"""
+PopulismRAG: Multi-Model Ensemble Retrieval-Augmented Generation for Holistic Grading
+======================================================================================
+
+RAG implementation for computational analysis of populist rhetoric using ensemble 
+embedding models, cross-encoder re-ranking, and score fusion techniques.
+
+MAIN ELEMENTS: 
+----------------------------
+1. **Multi-Model Ensemble Architecture**: Combines three complementary embedding models to capture
+   different semantic dimensions of political rhetoric:
+   - Primary: intfloat/e5-large-v2
+   - Multilingual: Handles cross-linguistic populist patterns 
+   - DistilRoBERTa: Captures syntactic and structural linguistic features
+
+2. **Cross-Encoder Re-ranking**: Implements a two-stage retrieval process where initial candidates
+   from vector similarity are re-evaluated by a cross-encoder that can assess contextual relationships
+   between query and candidate speeches simultaneously. This is critical for distinguishing
+   "elite athletes" from "corrupt elites" - semantically similar but rhetorically distinct.
+
+3. **Score Fusion Strategy**: Rather than simple averaging, employs ranking-based fusion to reduce
+   model bias and ensure robust retrieval across different rhetorical patterns. Compensates for
+   the limited training data (n=9) inherent in expert-coded populism datasets.
+
+4. **Hybrid Retrieval Framework**: Retrieves both similar and dissimilar examples to provide
+   contrastive learning signals, following established principles in human expert training for
+   the Holistic Grading method.
+
+TECHNICAL IMPLEMENTATION:
+------------------------
+- **Incremental FAISS Indexing**: Memory-efficient vector storage and retrieval
+- **Embedding Strategy Flexibility**: Supports both "speech_and_thought" and "contextual_enhanced"
+  approaches based on Anthropic's contextual retrieval patterns
+- **Performance Monitoring**: Built-in tracking for model performance and memory usage
+- **Robust Error Handling**: Graceful degradation when individual models fail
+
+----------------
+Author: Eduardo Ryo Tamaki
+Contact: eduardo@tamaki.ai
+
+External packages (pip install):
+- sentence-transformers (SentenceTransformer, CrossEncoder)
+- faiss (or faiss-cpu for CPU-only installation)
+- numpy
+- psutil (memory monitoring)
+
+Python standard library:
+- re, json, glob, typing, warnings, gc, os
+
+Last Updated: July 2025
+======================================================================================
+"""
 
 import re, json
 from glob import glob
