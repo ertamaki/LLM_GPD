@@ -26,7 +26,7 @@ This repository replicates Team Populism's Global Populism Database (GPD) holist
 - **Context-Enhanced Embeddings**: Incorporates expert analytical reasoning alongside speech content for better pattern matching
 - **Systematic Bias Mitigation**: Addresses common upward bias in AI populism scoring through dissimilar example retrieval
 
-![Our RAG workflow](Hybrid_RAG.png)
+![Our RAG workflow](HybridRAG.png)
 
 ---
 
